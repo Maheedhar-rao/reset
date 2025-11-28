@@ -44,7 +44,11 @@ def index():
     
     if token_hash and recovery_type == 'recovery':
         try:
-            logger.info(f"Received recovery request with token")
+            logger.info(f"=" * 50)
+            logger.info(f"RECOVERY FLOW STARTED")
+            logger.info(f"Token hash received: {token_hash}")
+            logger.info(f"Token hash length: {len(token_hash)}")
+            logger.info(f"=" * 50)
             
             headers = {
                 'apikey': SUPABASE_KEY,
@@ -55,41 +59,52 @@ def index():
             verify_url = f'{SUPABASE_URL}/auth/v1/verify'
             logger.info(f"Calling verify endpoint: {verify_url}")
             
+            payload = {
+                'token': token_hash,
+                'type': 'recovery'
+            }
+            logger.info(f"Verify payload: {payload}")
+            
             response = requests.post(
                 verify_url,
                 headers=headers,
-                json={
-                    'token': token_hash,
-                    'type': 'recovery'
-                },
+                json=payload,
                 timeout=10
             )
             
             logger.info(f"Verify response status: {response.status_code}")
-            logger.info(f"Verify response: {response.text[:200]}")
+            logger.info(f"Verify response headers: {dict(response.headers)}")
+            logger.info(f"Verify response body: {response.text}")
             
             if response.status_code == 200:
                 data = response.json()
+                logger.info(f"Parsed JSON data: {data}")
+                
                 access_token = data.get('access_token')
                 
                 if access_token:
-                    logger.info("Successfully got access token, redirecting")
+                    logger.info(f"Access token found: {access_token[:50]}...")
+                    logger.info(f"Access token length: {len(access_token)}")
+                    logger.info("Redirecting with access token in hash")
                     return redirect(f'/#access_token={access_token}&type=recovery', code=302)
                 else:
-                    logger.error(f"No access_token in response: {data}")
+                    logger.error(f"NO ACCESS TOKEN IN RESPONSE!")
+                    logger.error(f"Full response data: {data}")
+                    logger.error(f"Response keys: {data.keys()}")
                     return render_template_string(ERROR_TEMPLATE, 
                         title="Invalid Token",
                         message="Could not verify your reset link. Please request a new password reset."
                     )
             else:
-                logger.error(f"Verify failed: {response.text}")
+                logger.error(f"Verify failed with status {response.status_code}")
+                logger.error(f"Error response: {response.text}")
                 return render_template_string(ERROR_TEMPLATE,
                     title="Verification Failed", 
                     message="Your reset link is invalid or has expired. Please request a new password reset."
                 )
                 
         except Exception as e:
-            logger.error(f"Token exchange error: {str(e)}")
+            logger.error(f"Token exchange error: {str(e)}", exc_info=True)
             return render_template_string(ERROR_TEMPLATE,
                 title="Error",
                 message=f"An error occurred: {str(e)}"
