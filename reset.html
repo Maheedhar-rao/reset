@@ -23,13 +23,18 @@
     .pw{position:relative}
     .pw-toggle{position:absolute;right:10px;top:50%;transform:translateY(-50%);font-size:12px;color:#374151;cursor:pointer;background:#eef2ff;border:1px solid #c7d2fe;border-radius:999px;padding:2px 8px;user-select:none}
     .pw-toggle:hover{background:#ddd6fe}
+    .loading{display:none;text-align:center;padding:20px;color:#6b7280;}
   </style>
 </head>
 <body>
   <div class="card">
     <h1>Reset Your Password</h1>
     
-    <div id="viewReset">
+    <div id="loading" class="loading">
+      <p>Verifying your reset link...</p>
+    </div>
+
+    <div id="viewReset" style="display:none;">
       <p style="margin-top:0;">
         Choose a new password for your account. Make sure it's at least 8 characters long.
       </p>
@@ -103,12 +108,47 @@
       return data;
     }
 
-    // Get recovery token from URL hash
-    function getRecoveryToken() {
-      const hash = window.location.hash.substring(1); // Remove the #
+    // Get token from URL hash
+    function getTokenFromHash() {
+      const hash = window.location.hash.substring(1);
       const params = new URLSearchParams(hash);
-      return params.get("access_token");
+      return {
+        access_token: params.get("access_token"),
+        type: params.get("type")
+      };
     }
+
+    // Verify token and get JWT
+    async function verifyAndGetJWT() {
+      const { access_token, type } = getTokenFromHash();
+      
+      console.log("Token from hash:", access_token);
+      console.log("Type:", type);
+      
+      if (!access_token || type !== 'recovery') {
+        throw new Error("Invalid or missing reset token");
+      }
+
+      // Exchange token hash for JWT
+      const response = await fetch('/api/auth/verify-token', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          token: access_token,
+          type: 'recovery'
+        })
+      });
+
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.error || 'Failed to verify token');
+      }
+
+      const data = await response.json();
+      return data.access_token;
+    }
+
+    let validJWT = null;
 
     // Reset password handler
     $("btnResetPassword").addEventListener("click", async () => {
@@ -126,17 +166,15 @@
           throw new Error("Passwords do not match.");
         }
 
-        const token = getRecoveryToken();
-        if (!token) {
-          throw new Error("No recovery token found. Please use the link from your email.");
+        if (!validJWT) {
+          throw new Error("Invalid session. Please use the link from your email again.");
         }
 
-        // Disable button during request
         btn.disabled = true;
         btn.textContent = "Resetting...";
 
         await call("/api/auth/user/reset-confirm", { 
-          token: token, 
+          token: validJWT, 
           new_password: p1 
         });
 
@@ -145,11 +183,6 @@
         // Clear form
         $("resetNew").value = "";
         $("resetNew2").value = "";
-        
-        // Optional: Redirect to login page after 3 seconds
-        setTimeout(() => {
-          window.location.href = "https://your-main-app.com/login.html";
-        }, 3000);
 
       } catch (e) {
         showMsg($("noteReset"), e.message || "Could not reset password", false);
@@ -168,11 +201,25 @@
       });
     });
 
-    // Check if we have a recovery token on page load
-    window.addEventListener("DOMContentLoaded", () => {
-      const token = getRecoveryToken();
-      if (!token) {
-        showMsg($("noteReset"), "Invalid or missing reset link. Please request a new password reset.", false);
+    // Initialize on page load
+    window.addEventListener("DOMContentLoaded", async () => {
+      try {
+        $("loading").style.display = "block";
+        
+        // Verify token and get JWT
+        validJWT = await verifyAndGetJWT();
+        
+        console.log("Got valid JWT:", validJWT.substring(0, 50) + "...");
+        
+        // Show the reset form
+        $("loading").style.display = "none";
+        $("viewReset").style.display = "block";
+        $("resetNew").focus();
+        
+      } catch (error) {
+        $("loading").style.display = "none";
+        $("viewReset").style.display = "block";
+        showMsg($("noteReset"), error.message || "Invalid or expired reset link. Please request a new password reset.", false);
         $("btnResetPassword").disabled = true;
       }
     });
