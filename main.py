@@ -53,6 +53,42 @@ def reset_confirm():
         return jsonify({'error': f'Network error: {str(e)}'}), 500
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+        
+@app.route('/api/auth/user/reset', methods=['POST'])
+def reset_password():
+    """Send password reset email"""
+    try:
+        data = request.get_json()
+        email = data.get('email')
+        
+        if not email:
+            return jsonify({'error': 'Email is required'}), 400
+        
+        headers = {
+            'apikey': SUPABASE_KEY,
+            'Content-Type': 'application/json'
+        }
+        
+        # Send recovery email with proper redirect URL
+        response = requests.post(
+            f'{SUPABASE_URL}/auth/v1/recover',
+            headers=headers,
+            json={
+                'email': email,
+                'options': {
+                    'redirectTo': 'https://reset-production.up.railway.app'
+                }
+            }
+        )
+        
+        if response.status_code in [200, 201]:
+            return jsonify({'message': 'Reset email sent'}), 200
+        else:
+            error_msg = response.json().get('msg', 'Failed to send reset email')
+            return jsonify({'error': error_msg}), response.status_code
+            
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 
 @app.route('/health')
 def health():
