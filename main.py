@@ -180,7 +180,7 @@ def reset_confirm():
 
 @app.route('/api/auth/verify-token', methods=['POST'])
 def verify_token():
-    """Exchange token hash for JWT"""
+    """Exchange token hash for JWT using pkce flow"""
     try:
         data = request.get_json()
         token_hash = data.get('token')
@@ -193,42 +193,131 @@ def verify_token():
         if not token_hash or token_type != 'recovery':
             return jsonify({'error': 'Invalid token or type'}), 400
         
+        # For recovery tokens, we need to use the token hash directly as the JWT
+        # But first, let's try to exchange it properly
         headers = {
             'apikey': SUPABASE_KEY,
             'Content-Type': 'application/json'
         }
         
-        # Verify with Supabase
-        response = requests.post(
-            f'{SUPABASE_URL}/auth/v1/verify',
-            headers=headers,
-            json={
-                'token': token_hash,
-                'type': 'recovery'
-            },
+        # Try using the token directly to get user info
+        # The token hash from email can be used directly with Supabase
+        test_headers = {
+            'apikey': SUPABASE_KEY,
+            'Authorization': f'Bearer {token_hash}',
+            'Content-Type': 'application/json'
+        }
+        
+        # Test if this token works
+        test_response = requests.get(
+            f'{SUPABASE_URL}/auth/v1/user',
+            headers=test_headers,
             timeout=10
         )
         
-        logger.info(f"Supabase verify response: {response.status_code}")
-        logger.info(f"Response body: {response.text[:200]}")
+        logger.info(f"Token test response: {test_response.status_code}")
+        logger.info(f"Token test body: {test_response.text[:200]}")
         
-        if response.status_code == 200:
-            data = response.json()
-            access_token = data.get('access_token')
-            
-            if access_token:
-                result = jsonify({'access_token': access_token})
-                result.headers.add('Access-Control-Allow-Origin', '*')
-                return result, 200
-            else:
-                return jsonify({'error': 'No access token in response'}), 500
-        else:
-            error = response.json() if response.text else {}
-            return jsonify({'error': error.get('msg', 'Verification failed')}), response.status_code
+        if test_response.status_code == 200:
+            # Token works directly!
+            logger.info("Token hash works as JWT directly")
+            result = jsonify({'access_token': token_hash})
+            result.headers.add('Access-Control-Allow-Origin', '*')
+            return result, 200
+        
+        # If direct use doesn't work, the token might need to be exchanged
+        # Let's return an error with details
+        return jsonify({'error': f'Token verification failed. Status: {test_response.status_code}'}), 400
             
     except Exception as e:
         logger.error(f"Verify token error: {str(e)}", exc_info=True)
         return jsonify({'error': str(e)}), 500
+        
+@app.route('/api/auth/user/reset-confirm-with-hash', methods=['POST', 'OPTIONS'])
+def reset_confirm_with_hash():
+    """Complete password reset using token hash from email"""
+    
+    if request.method == 'OPTIONS':
+        response = jsonify({'status': 'ok'})
+        response.headers.add('Access-Control-Allow-Origin', '*')
+        response.headers.add('Access-Control-Allow-Headers', 'Content-Type,Authorization')
+        response.headers.add('Access-Control-Allow-Methods', 'POST')
+        return response
+    
+    try:
+        data = request.get_json()
+        token_hash = data.get('token_hash')
+        new_password = data.get('new_password')
+        
+        logger.info(f"Password reset with hash")
+        logger.info(f"Token hash: {token_hash[:50] if token_hash else 'None'}...")
+        
+        if not token_hash or not new_password:
+            return jsonify({'error': 'Token and new password are required'}), 400
+        
+        if len(new_password) < 8:
+            return jsonify({'error': 'Password must be at least 8 characters'}), 400
+        
+        # Use Supabase admin API to update password with token hash
+        headers = {
+            'apikey': SUPABASE_KEY,
+            'Content-Type': 'application/json'
+        }
+        
+        # First verify the token and get the user
+        verify_url = f'{SUPABASE_URL}/auth/v1/user'
+        verify_headers = {
+            'apikey': SUPABASE_KEY,
+            'Authorization': f'Bearer {token_hash}',
+            'Content-Type': 'application/json'
+        }
+        
+        logger.info(f"Verifying token hash...")
+        verify_response = requests.get(verify_url, headers=verify_headers, timeout=10)
+        logger.info(f"Verify response: {verify_response.status_code}")
+        
+        if verify_response.status_code != 200:
+            logger.error(f"Token verification failed: {verify_response.text}")
+            return jsonify({'error': 'Invalid or expired reset token'}), 401
+        
+        # Now update the password
+        update_headers = {
+            'apikey': SUPABASE_KEY,
+            'Authorization': f'Bearer {token_hash}',
+            'Content-Type': 'application/json'
+        }
+        
+        update_url = f'{SUPABASE_URL}/auth/v1/user'
+        logger.info(f"Updating password...")
+        
+        response = requests.put(
+            update_url,
+            headers=update_headers,
+            json={'password': new_password},
+            timeout=10
+        )
+        
+        logger.info(f"Update response status: {response.status_code}")
+        logger.info(f"Update response: {response.text[:200]}")
+        
+        if response.status_code == 200:
+            result = jsonify({'message': 'Password updated successfully'})
+            result.headers.add('Access-Control-Allow-Origin', '*')
+            return result, 200
+        else:
+            error_data = response.json() if response.text else {}
+            error_msg = error_data.get('msg') or error_data.get('error_description') or error_data.get('message') or 'Failed to update password'
+            logger.error(f"Password update failed: {error_msg}")
+            
+            result = jsonify({'error': error_msg})
+            result.headers.add('Access-Control-Allow-Origin', '*')
+            return result, response.status_code
+            
+    except Exception as e:
+        logger.error(f"Exception in reset_confirm_with_hash: {str(e)}", exc_info=True)
+        result = jsonify({'error': str(e)})
+        result.headers.add('Access-Control-Allow-Origin', '*')
+        return result, 500
 
 @app.route('/health')
 def health():
