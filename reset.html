@@ -23,18 +23,13 @@
     .pw{position:relative}
     .pw-toggle{position:absolute;right:10px;top:50%;transform:translateY(-50%);font-size:12px;color:#374151;cursor:pointer;background:#eef2ff;border:1px solid #c7d2fe;border-radius:999px;padding:2px 8px;user-select:none}
     .pw-toggle:hover{background:#ddd6fe}
-    .loading{display:none;text-align:center;padding:20px;color:#6b7280;}
   </style>
 </head>
 <body>
   <div class="card">
     <h1>Reset Your Password</h1>
-    
-    <div id="loading" class="loading">
-      <p>Verifying your reset link...</p>
-    </div>
 
-    <div id="viewReset" style="display:none;">
+    <div id="viewReset">
       <p style="margin-top:0;">
         Choose a new password for your account. Make sure it's at least 8 characters long.
       </p>
@@ -95,60 +90,19 @@
     togglePw($("resetNew"), $("resetNewToggle"));
     togglePw($("resetNew2"), $("resetNew2Toggle"));
 
-    // API call helper
-    async function call(url, payload) {
-      const r = await fetch(url, { 
-        method: "POST", 
-        headers: { "Content-Type": "application/json" }, 
-        body: JSON.stringify(payload || {}) 
-      });
-      const ct = (r.headers.get("content-type") || "").toLowerCase();
-      const data = ct.includes("application/json") ? await r.json().catch(() => ({})) : {};
-      if (!r.ok) throw new Error((data && data.error) || `HTTP ${r.status}`);
-      return data;
-    }
-
-    // Get token from URL hash
-    function getTokenFromHash() {
+    // Get recovery token from URL hash
+    function getRecoveryToken() {
       const hash = window.location.hash.substring(1);
       const params = new URLSearchParams(hash);
-      return {
-        access_token: params.get("access_token"),
-        type: params.get("type")
-      };
-    }
-
-    // Verify token and get JWT
-    async function verifyAndGetJWT() {
-      const { access_token, type } = getTokenFromHash();
+      const token = params.get("access_token");
+      const type = params.get("type");
       
-      console.log("Token from hash:", access_token);
+      console.log("Recovery token found:", token ? "YES" : "NO");
       console.log("Type:", type);
+      console.log("Full hash:", window.location.hash);
       
-      if (!access_token || type !== 'recovery') {
-        throw new Error("Invalid or missing reset token");
-      }
-
-      // Exchange token hash for JWT
-      const response = await fetch('/api/auth/verify-token', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          token: access_token,
-          type: 'recovery'
-        })
-      });
-
-      if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.error || 'Failed to verify token');
-      }
-
-      const data = await response.json();
-      return data.access_token;
+      return { token, type };
     }
-
-    let validJWT = null;
 
     // Reset password handler
     $("btnResetPassword").addEventListener("click", async () => {
@@ -166,17 +120,30 @@
           throw new Error("Passwords do not match.");
         }
 
-        if (!validJWT) {
-          throw new Error("Invalid session. Please use the link from your email again.");
+        const { token, type } = getRecoveryToken();
+        
+        if (!token || type !== 'recovery') {
+          throw new Error("No recovery token found. Please use the link from your email.");
         }
 
         btn.disabled = true;
         btn.textContent = "Resetting...";
 
-        await call("/api/auth/user/reset-confirm", { 
-          token: validJWT, 
-          new_password: p1 
+        // Call backend with the token hash
+        const response = await fetch("/api/auth/user/reset-confirm-with-hash", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ 
+            token_hash: token, 
+            new_password: p1 
+          })
         });
+
+        const data = await response.json();
+        
+        if (!response.ok) {
+          throw new Error(data.error || "Could not reset password");
+        }
 
         showMsg($("noteReset"), "Password updated successfully! You can now sign in with your new password.", true);
         
@@ -201,25 +168,11 @@
       });
     });
 
-    // Initialize on page load
-    window.addEventListener("DOMContentLoaded", async () => {
-      try {
-        $("loading").style.display = "block";
-        
-        // Verify token and get JWT
-        validJWT = await verifyAndGetJWT();
-        
-        console.log("Got valid JWT:", validJWT.substring(0, 50) + "...");
-        
-        // Show the reset form
-        $("loading").style.display = "none";
-        $("viewReset").style.display = "block";
-        $("resetNew").focus();
-        
-      } catch (error) {
-        $("loading").style.display = "none";
-        $("viewReset").style.display = "block";
-        showMsg($("noteReset"), error.message || "Invalid or expired reset link. Please request a new password reset.", false);
+    // Check if we have a recovery token on page load
+    window.addEventListener("DOMContentLoaded", () => {
+      const { token, type } = getRecoveryToken();
+      if (!token || type !== 'recovery') {
+        showMsg($("noteReset"), "Invalid or missing reset link. Please request a new password reset.", false);
         $("btnResetPassword").disabled = true;
       }
     });
