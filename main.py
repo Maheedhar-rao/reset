@@ -178,6 +178,58 @@ def reset_confirm():
         result.headers.add('Access-Control-Allow-Origin', '*')
         return result, 500
 
+@app.route('/api/auth/verify-token', methods=['POST'])
+def verify_token():
+    """Exchange token hash for JWT"""
+    try:
+        data = request.get_json()
+        token_hash = data.get('token')
+        token_type = data.get('type')
+        
+        logger.info(f"Token verification request")
+        logger.info(f"Token hash: {token_hash[:50] if token_hash else 'None'}...")
+        logger.info(f"Type: {token_type}")
+        
+        if not token_hash or token_type != 'recovery':
+            return jsonify({'error': 'Invalid token or type'}), 400
+        
+        headers = {
+            'apikey': SUPABASE_KEY,
+            'Content-Type': 'application/json'
+        }
+        
+        # Verify with Supabase
+        response = requests.post(
+            f'{SUPABASE_URL}/auth/v1/verify',
+            headers=headers,
+            json={
+                'token': token_hash,
+                'type': 'recovery'
+            },
+            timeout=10
+        )
+        
+        logger.info(f"Supabase verify response: {response.status_code}")
+        logger.info(f"Response body: {response.text[:200]}")
+        
+        if response.status_code == 200:
+            data = response.json()
+            access_token = data.get('access_token')
+            
+            if access_token:
+                result = jsonify({'access_token': access_token})
+                result.headers.add('Access-Control-Allow-Origin', '*')
+                return result, 200
+            else:
+                return jsonify({'error': 'No access token in response'}), 500
+        else:
+            error = response.json() if response.text else {}
+            return jsonify({'error': error.get('msg', 'Verification failed')}), response.status_code
+            
+    except Exception as e:
+        logger.error(f"Verify token error: {str(e)}", exc_info=True)
+        return jsonify({'error': str(e)}), 500
+
 @app.route('/health')
 def health():
     """Health check endpoint"""
